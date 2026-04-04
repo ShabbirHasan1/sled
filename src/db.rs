@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::io;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
-
-use parking_lot::Mutex;
 
 use crate::*;
 
@@ -176,7 +174,7 @@ impl<const LEAF_FANOUT: usize> Db<LEAF_FANOUT> {
         #[cfg(feature = "for-internal-testing-only")]
         let _b0 = crate::block_checker::track_blocks();
 
-        for (_cid, tree) in self.trees.lock().iter() {
+        for (_cid, tree) in self.trees.lock().unwrap().iter() {
             let mut hi_none_count = 0;
             let mut last_hi = None;
             for (low, node) in tree.index.iter() {
@@ -410,7 +408,7 @@ impl<const LEAF_FANOUT: usize> Db<LEAF_FANOUT> {
         CollectionName,
         impl Iterator<Item = Vec<Vec<u8>>> + '_,
     )> {
-        let trees = self.trees.lock();
+        let trees = self.trees.lock().unwrap();
 
         let mut ret = vec![];
 
@@ -519,7 +517,7 @@ impl<const LEAF_FANOUT: usize> Db<LEAF_FANOUT> {
 
     pub fn drop_tree<V: AsRef<[u8]>>(&self, name: V) -> io::Result<bool> {
         let name_ref = name.as_ref();
-        let trees = self.trees.lock();
+        let trees = self.trees.lock().unwrap();
 
         let tree = if let Some(collection_id_buf) =
             self.collection_name_mapping.get(name_ref)?
@@ -547,7 +545,7 @@ impl<const LEAF_FANOUT: usize> Db<LEAF_FANOUT> {
         name: V,
     ) -> io::Result<Tree<LEAF_FANOUT>> {
         let name_ref = name.as_ref();
-        let mut trees = self.trees.lock();
+        let mut trees = self.trees.lock().unwrap();
 
         if let Some(collection_id_buf) =
             self.collection_name_mapping.get(name_ref)?

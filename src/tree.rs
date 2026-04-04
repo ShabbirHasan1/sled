@@ -505,11 +505,12 @@ impl<const LEAF_FANOUT: usize> Tree<LEAF_FANOUT> {
 
         let (p_object_id, p_sz) =
             predecessor.handle_cache_access_and_eviction_externally();
-        let (s_object_id, s_sz) =
-            successor.handle_cache_access_and_eviction_externally();
+
+        // Explicitly don't perform cache maintenance for successor, as we've
+        // removed it from our index anyway. Let it drop.
+        let _ = successor.handle_cache_access_and_eviction_externally();
 
         self.cache.mark_access_and_evict(p_object_id, p_sz, merge_epoch)?;
-        self.cache.mark_access_and_evict(s_object_id, s_sz, merge_epoch)?;
 
         Ok(())
     }

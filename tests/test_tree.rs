@@ -31,7 +31,7 @@ const N: usize = N_THREADS * N_PER_THREAD; // NB N should be multiple of N_THREA
 const SPACE: usize = N;
 
 #[allow(dead_code)]
-const INTENSITY: usize = 1;
+const INTENSITY: usize = 16;
 
 fn kv(i: usize) -> InlineArray {
     let i = i % SPACE;
@@ -352,13 +352,97 @@ fn concurrent_tree_pops() -> std::io::Result<()> {
 }
 
 #[test]
+fn thrash_cache() {
+    use std::thread;
+
+    const THREADS: u8 = 16;
+    const WRITES_PER_THREAD: u32 = 4_000;
+
+    let config =
+        Config::tmp().unwrap().flush_every_ms(Some(1)).cache_capacity_bytes(1);
+
+    let db: sled::Db<3> = config.open().unwrap();
+
+    thread::scope(|s| {
+        for t in 0..THREADS {
+            let db = db.clone();
+            s.spawn(move || {
+                for w in 0..WRITES_PER_THREAD {
+                    let mut data =
+                        Vec::with_capacity(1 + std::mem::size_of::<u16>());
+                    data.extend_from_slice(&w.to_le_bytes());
+                    data.push(t);
+                    db.insert(&data, &*data).unwrap();
+                    if w % 100_000 == 0 {
+                        db.flush().unwrap();
+                    }
+                }
+            });
+        }
+    });
+
+    thread::scope(|s| {
+        for t in 0..THREADS {
+            let db = db.clone();
+            s.spawn(move || {
+                for w in 0..WRITES_PER_THREAD {
+                    let mut data =
+                        Vec::with_capacity(1 + std::mem::size_of::<u16>());
+                    data.extend_from_slice(&w.to_le_bytes());
+                    data.push(t);
+                    let read = db.get(&data).unwrap().unwrap();
+                    assert_eq!(read, &*data);
+                }
+            });
+        }
+    });
+
+    thread::scope(|s| {
+        for t in 0..THREADS {
+            let db = db.clone();
+            s.spawn(move || {
+                for w in 0..WRITES_PER_THREAD {
+                    let mut data =
+                        Vec::with_capacity(1 + std::mem::size_of::<u16>());
+                    data.extend_from_slice(&w.to_le_bytes());
+                    data.push(t);
+                    let removed = db.remove(&data).unwrap().unwrap();
+                    assert_eq!(removed, &*data);
+                    if w % 100_000 == 0 {
+                        db.flush().unwrap();
+                    }
+                }
+            });
+        }
+    });
+
+    thread::scope(|s| {
+        for t in 0..THREADS {
+            let db = db.clone();
+            s.spawn(move || {
+                for w in 0..WRITES_PER_THREAD {
+                    let mut data =
+                        Vec::with_capacity(1 + std::mem::size_of::<u16>());
+                    data.extend_from_slice(&w.to_le_bytes());
+                    data.push(t);
+                    let read = db.get(&data).unwrap();
+                    assert_eq!(read, None);
+                }
+            });
+        }
+    });
+}
+
+#[test]
 #[cfg(not(miri))] // can't create threads
 fn concurrent_tree_ops() {
     use std::thread;
 
+    const RUNS: usize = 1;
+
     common::setup_logger();
 
-    for i in 0..INTENSITY {
+    for i in 0..RUNS {
         debug!("beginning test {}", i);
 
         let config = Config::tmp()
@@ -531,7 +615,7 @@ fn concurrent_tree_iter() -> io::Result<()> {
 
     let config = Config::tmp()
         .unwrap()
-        .cache_capacity_bytes(1024 * 1024 * 1024)
+        .cache_capacity_bytes(1024)
         .flush_every_ms(Some(1));
 
     let t: Db = config.open().unwrap();

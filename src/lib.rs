@@ -175,7 +175,7 @@ const INDEX_FANOUT: usize = 64;
 const EBR_LOCAL_GC_BUFFER_SIZE: usize = 128;
 
 use std::collections::BTreeMap;
-use std::num::NonZeroU64;
+use std::num::NonZero;
 use std::ops::Bound;
 use std::sync::Arc;
 
@@ -272,11 +272,11 @@ impl std::error::Error for CompareAndSwapError {}
     Eq,
     Hash,
 )]
-pub struct ObjectId(NonZeroU64);
+pub struct ObjectId(NonZero<u64>);
 
 impl ObjectId {
     fn new(from: u64) -> Option<ObjectId> {
-        NonZeroU64::new(from).map(ObjectId)
+        NonZero::new(from).map(ObjectId)
     }
 }
 
@@ -284,13 +284,13 @@ impl std::ops::Deref for ObjectId {
     type Target = u64;
 
     fn deref(&self) -> &u64 {
-        let self_ref: &NonZeroU64 = &self.0;
+        let self_ref: &NonZero<u64> = &self.0;
 
         // NonZeroU64 is repr(transparent) where it wraps a u64
         // so it is guaranteed to match the binary layout. This
         // makes it safe to cast a reference to one as a reference
         // to the other like this.
-        let self_ptr: *const NonZeroU64 = self_ref as *const _;
+        let self_ptr: *const NonZero<u64> = self_ref as *const _;
         let reference: *const u64 = self_ptr as *const u64;
 
         unsafe { &*reference }
@@ -298,7 +298,7 @@ impl std::ops::Deref for ObjectId {
 }
 
 impl concurrent_map::Minimum for ObjectId {
-    const MIN: ObjectId = ObjectId(NonZeroU64::MIN);
+    const MIN: ObjectId = ObjectId(NonZero::<u64>::MIN);
 }
 
 #[derive(
@@ -351,17 +351,16 @@ impl<const LEAF_FANOUT: usize> PartialEq for Object<LEAF_FANOUT> {
 /// last "high-level" struct is dropped, the flusher thread
 /// is cleaned up.
 struct ShutdownDropper<const LEAF_FANOUT: usize> {
-    shutdown_sender: parking_lot::Mutex<
-        std::sync::mpsc::Sender<std::sync::mpsc::Sender<()>>,
-    >,
-    cache: parking_lot::Mutex<object_cache::ObjectCache<LEAF_FANOUT>>,
+    shutdown_sender:
+        std::sync::Mutex<std::sync::mpsc::Sender<std::sync::mpsc::Sender<()>>>,
+    cache: std::sync::Mutex<object_cache::ObjectCache<LEAF_FANOUT>>,
 }
 
 impl<const LEAF_FANOUT: usize> Drop for ShutdownDropper<LEAF_FANOUT> {
     fn drop(&mut self) {
         let (tx, rx) = std::sync::mpsc::channel();
         log::debug!("sending shutdown signal to flusher");
-        if self.shutdown_sender.lock().send(tx).is_ok() {
+        if self.shutdown_sender.lock().unwrap().send(tx).is_ok() {
             if let Err(e) = rx.recv() {
                 log::error!("failed to shut down flusher thread: {:?}", e);
             } else {
@@ -371,7 +370,7 @@ impl<const LEAF_FANOUT: usize> Drop for ShutdownDropper<LEAF_FANOUT> {
             log::debug!(
                 "failed to shut down flusher, manually flushing ObjectCache"
             );
-            let cache = self.cache.lock();
+            let cache = self.cache.lock().unwrap();
             if let Err(e) = cache.flush() {
                 log::error!(
                     "Db flusher encountered error while flushing: {:?}",

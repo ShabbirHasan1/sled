@@ -471,8 +471,6 @@ impl<const LEAF_FANOUT: usize> ObjectCache<LEAF_FANOUT> {
     }
 
     pub fn flush(&self) -> io::Result<FlushStats> {
-        let mut write_batch = vec![];
-
         log::trace!("advancing epoch");
         let (
             previous_flush_complete_notifier,
@@ -515,6 +513,8 @@ impl<const LEAF_FANOUT: usize> ObjectCache<LEAF_FANOUT> {
         let mut evict_after_flush = vec![];
 
         let before_serialization = Instant::now();
+
+        let mut write_batch = vec![];
 
         for ((dirty_epoch, dirty_object_id), dirty_value_initial_read) in
             self.dirty.range(..flush_boundary)
@@ -858,6 +858,7 @@ impl<const LEAF_FANOUT: usize> ObjectCache<LEAF_FANOUT> {
             let leaf = lock.leaf.as_mut().unwrap();
 
             if let Some(dirty_epoch) = leaf.dirty_flush_epoch {
+                assert!(dirty_epoch >= flush_through_epoch);
                 if dirty_epoch != flush_through_epoch {
                     continue;
                 }

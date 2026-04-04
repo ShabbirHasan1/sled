@@ -1,18 +1,17 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::num::NonZeroU64;
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicPtr, AtomicU64, Ordering},
+    mpsc::{Receiver, SyncSender, sync_channel},
 };
 
-use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use fault_injection::{annotate, fallible, maybe};
 use fnv::FnvHashMap;
 use inline_array::InlineArray;
-use parking_lot::Mutex;
 use rayon::prelude::*;
 use zstd::stream::read::Decoder as ZstdDecoder;
 use zstd::stream::write::Encoder as ZstdEncoder;
@@ -61,13 +60,13 @@ struct LogAndStats {
 }
 
 enum WorkerMessage {
-    Shutdown(Sender<()>),
+    Shutdown(SyncSender<()>),
     LogReadyToCompact { log_and_stats: LogAndStats },
 }
 
 fn get_compactions(
     rx: &mut Receiver<WorkerMessage>,
-) -> Result<Vec<u64>, Option<Sender<()>>> {
+) -> Result<Vec<u64>, Option<SyncSender<()>>> {
     let mut ret = vec![];
 
     match rx.recv() {
@@ -89,6 +88,7 @@ fn get_compactions(
     loop {
         match rx.try_recv() {
             Ok(WorkerMessage::Shutdown(tx)) => {
+                // sending () acks the shutdown to the caller of shutdown_inner
                 tx.send(()).unwrap();
                 return Err(Some(tx));
             }
@@ -208,7 +208,7 @@ struct Inner {
     snapshot_size: Arc<AtomicU64>,
     storage_directory: PathBuf,
     directory_lock: Arc<fs::File>,
-    worker_outbox: Sender<WorkerMessage>,
+    worker_outbox: SyncSender<WorkerMessage>,
 }
 
 impl Drop for Inner {
@@ -237,7 +237,7 @@ impl MetadataStore {
     }
 
     fn shutdown_inner(&mut self) {
-        let (tx, rx) = bounded(1);
+        let (tx, rx) = sync_channel(1);
         if self.inner.worker_outbox.send(WorkerMessage::Shutdown(tx)).is_ok() {
             let _ = rx.recv();
         }
@@ -308,7 +308,7 @@ impl MetadataStore {
             ))),
         };
 
-        let (tx, rx) = unbounded();
+        let (tx, rx) = sync_channel(64);
 
         let inner = Inner {
             snapshot_size: Arc::new(recovery.snapshot_size.into()),
@@ -368,7 +368,7 @@ impl MetadataStore {
         let batch_bytes = serialize_batch(batch);
         let ret = batch_bytes.len() as u64;
 
-        let mut log = self.inner.active_log.lock();
+        let mut log = self.inner.active_log.lock().unwrap();
 
         if let Err(e) = maybe!(log.file.write_all(&batch_bytes)) {
             self.set_error(&e);
@@ -599,7 +599,7 @@ fn read_frame(
             .read_exact(&mut low_key_buf)
             .expect("we expect reads from crc-verified buffers to succeed");
 
-        if let Some(location_nzu) = NonZeroU64::new(location) {
+        if let Some(location_nzu) = NonZero::new(location) {
             let low_key = InlineArray::from(&*low_key_buf);
 
             ret.push(UpdateMetadata::Store {
@@ -756,7 +756,7 @@ fn read_snapshot_and_apply_logs(
     snapshot_id_opt: Option<u64>,
     locked_directory: &fs::File,
 ) -> io::Result<MetadataRecovery> {
-    let (snapshot_tx, snapshot_rx) = bounded(1);
+    let (snapshot_tx, snapshot_rx) = sync_channel(1);
     if let Some(snapshot_id) = snapshot_id_opt {
         let path: PathBuf = path.into();
         rayon::spawn(move || {

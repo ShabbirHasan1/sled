@@ -1,3 +1,5 @@
+profile*
+docs
 CLAUDE.md
 fuzz-*.log
 default.sled

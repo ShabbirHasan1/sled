@@ -2,9 +2,10 @@ use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use std::sync::Mutex;
+
 use crossbeam_queue::SegQueue;
 use fnv::FnvHashSet;
-use parking_lot::Mutex;
 
 #[derive(Default, Debug)]
 struct FreeSetAndTip {
@@ -34,7 +35,7 @@ impl Allocator {
         &self,
         desired_ratio: f32,
     ) -> Option<(u64, u64)> {
-        let mut free_and_tip = self.free_and_pending.lock();
+        let mut free_and_tip = self.free_and_pending.lock().unwrap();
 
         let next_to_allocate = free_and_tip.next_to_allocate;
 
@@ -90,7 +91,7 @@ impl Allocator {
     }
 
     pub fn max_allocated(&self) -> Option<u64> {
-        let next = self.free_and_pending.lock().next_to_allocate;
+        let next = self.free_and_pending.lock().unwrap().next_to_allocate;
 
         if next == 0 {
             None
@@ -101,7 +102,7 @@ impl Allocator {
 
     pub fn allocate(&self) -> u64 {
         self.allocation_counter.fetch_add(1, Ordering::Relaxed);
-        let mut free_and_tip = self.free_and_pending.lock();
+        let mut free_and_tip = self.free_and_pending.lock().unwrap();
         while let Some(free_id) = self.free_queue.pop() {
             free_and_tip.free_set.insert(free_id);
         }
@@ -122,7 +123,7 @@ impl Allocator {
     pub fn free(&self, id: u64) {
         if cfg!(not(feature = "monotonic-behavior")) {
             self.free_counter.fetch_add(1, Ordering::Relaxed);
-            if let Some(mut free) = self.free_and_pending.try_lock() {
+            if let Ok(mut free) = self.free_and_pending.try_lock() {
                 while let Some(free_id) = self.free_queue.pop() {
                     free.free_set.insert(free_id);
                 }

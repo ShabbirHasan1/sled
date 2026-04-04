@@ -3,9 +3,57 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use fault_injection::{annotate, fallible};
-use tempdir::TempDir;
 
 use crate::Db;
+
+struct TempDir(PathBuf);
+
+impl std::fmt::Debug for TempDir {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("TempDir").field(&self.0).finish()
+    }
+}
+
+impl TempDir {
+    fn new(prefix: &str) -> io::Result<Self> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let pid = std::process::id();
+
+        loop {
+            let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+            let path = std::env::temp_dir()
+                .join(prefix)
+                .join(pid.to_string())
+                .join(n.to_string());
+
+            // create_dir_all maps to mkdir(2) for the final component,
+            // which is atomic and fails with EEXIST if it already exists.
+            match std::fs::create_dir_all(&path) {
+                Ok(()) => return Ok(TempDir(path)),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                    // Skip ahead 999 slots to avoid crawling one-by-one
+                    // through directories left by a previous process with
+                    // the same PID.
+                    COUNTER.fetch_add(999, Ordering::SeqCst);
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
 
 macro_rules! builder {
     ($(($name:ident, $t:ty, $desc:expr)),*) => {
@@ -69,7 +117,7 @@ impl Config {
     /// temporary directory that will be deleted when this `Config`
     /// is dropped.
     pub fn tmp() -> io::Result<Config> {
-        let tempdir = fallible!(tempdir::TempDir::new("sled_tmp"));
+        let tempdir = fallible!(TempDir::new("sled_tmp"));
 
         Ok(Config {
             path: tempdir.path().into(),

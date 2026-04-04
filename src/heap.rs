@@ -11,7 +11,9 @@ use ebr::{Ebr, Guard};
 use fault_injection::{annotate, fallible, maybe};
 use fnv::FnvHashSet;
 use fs2::FileExt as _;
-use parking_lot::{Mutex, RwLock};
+use std::sync::Mutex;
+
+use parking_lot::RwLock;
 use rayon::prelude::*;
 
 use crate::object_location_mapper::{AllocatorStats, ObjectLocationMapper};
